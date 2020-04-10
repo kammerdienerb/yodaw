@@ -1,0 +1,3 @@
+style hat
+vimish-bind normal ctrl-y CMD less "./build.sh debug && pkill -HUP _yodaw"
+vimish-bind normal ctrl-t CMD sh-silent "echo \"./yodaw\" | $SHELL &"

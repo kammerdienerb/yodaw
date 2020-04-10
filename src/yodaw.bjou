@@ -1,0 +1,14 @@
+using import "state.bjou"
+using import "ui.bjou"
+
+proc __no_mangle__ lib_initialize() {
+    alloc_state()
+}
+
+proc __no_mangle__ lib_get_state() : yodaw_state_t* {
+    return state
+}
+
+proc __no_mangle__ lib_set_state(new_state : yodaw_state_t*) {
+    state = new_state
+}

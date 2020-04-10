@@ -1,0 +1,10 @@
+# utils.bjou
+
+module yodaw_utils
+
+proc is_none$T(arg : T) : bool {
+    if n : none = arg
+        return true
+
+    return false
+}

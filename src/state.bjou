@@ -1,0 +1,20 @@
+# state.bjou
+
+module yodaw_state
+
+using import "ui.bjou"
+
+
+state : yodaw_state_t*
+
+
+type yodaw_state_t {
+    ui : ui_state_t
+}
+
+proc alloc_state() {
+    state = (malloc(sizeof yodaw_state_t) as yodaw_state_t*)
+    memset(state, 0, sizeof yodaw_state_t)
+
+    print "lib state initialized"
+}

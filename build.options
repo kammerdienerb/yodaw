@@ -1,0 +1,4 @@
+CC="gcc"
+common="-std=gnu99"
+debug="${common} -g -O0 -DYODAW_DO_ASSERTIONS -DYODAW_DO_LOGGING"
+release="${common} -O3"

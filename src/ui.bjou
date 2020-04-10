@@ -1,0 +1,522 @@
+# ui.bjou
+
+module yodaw_ui
+
+
+using import "state.bjou"
+using import "utils.bjou"
+
+using import "hash_table.bjou"
+using import "pair.bjou"
+using import "hash.bjou"
+type str_hasher { const hash : <(string) : u64> = hash::hash }
+
+const UI_STATE_NORMAL := 1
+const UI_STATE_QUIT   := 2
+
+const WINDOW_BORDER           : u32 = (1u32 bshl 0)
+const WINDOW_MOVABLE          : u32 = (1u32 bshl 1)
+const WINDOW_SCALABLE         : u32 = (1u32 bshl 2)
+const WINDOW_CLOSABLE         : u32 = (1u32 bshl 3)
+const WINDOW_MINIMIZABLE      : u32 = (1u32 bshl 4)
+const WINDOW_NO_SCROLLBAR     : u32 = (1u32 bshl 5)
+const WINDOW_TITLE            : u32 = (1u32 bshl 6)
+const WINDOW_SCROLL_AUTO_HIDE : u32 = (1u32 bshl 7)
+const WINDOW_BACKGROUND       : u32 = (1u32 bshl 8)
+const WINDOW_SCALE_LEFT       : u32 = (1u32 bshl 9)
+const WINDOW_NO_INPUT         : u32 = (1u32 bshl 10)
+
+const UI_WIN                := 1
+const UI_BUTTON             := 2
+const UI_MENU_BAR           := 3
+const UI_ROW_LAYOUT_STATIC  := 4
+const UI_ROW_LAYOUT_DYNAMIC := 5
+const UI_MENU_LABEL         := 6
+const UI_LABEL              := 7
+const UI_SIMPLE_COMBOBOX    := 8
+
+type ui_item_id = int
+
+const WIN_STATE_NORMAL    := 1
+const WIN_STATE_COLLAPSED := 2
+const WIN_STATE_CLOSED    := 3
+
+type ui_action_t = <(ui_item_t ref)>
+
+type ui_item_t {
+    kind         : int
+    flags        : u32
+    t            : int
+    l            : int
+    h            : int
+    w            : int
+    win_state    : int
+    text         : string
+    text_options : char*[...]
+    selected     : int
+    children     : ui_item_id[...]
+    act_name     : string
+
+    proc _set_flag(this, f : u32) {
+        this.flags = this.flags bor f
+    }
+
+    proc _set_action(this, act_name : char*) {
+        this.act_name.set(act_name)
+    }
+}
+
+proc set_flag(id : ui_item_id, f : u32) {
+    get_ui_item(id)._set_flag(f)
+}
+
+proc set_action(id : ui_item_id, act_name : char*) {
+    get_ui_item(id)._set_action(act_name)
+}
+
+type ui_track_t {
+    name         : string
+    controls_win : ui_item_id
+    visual_win   : ui_item_id
+    number       : int
+
+    const OFFSET_FROM_TOP := 68
+    const PADDING         := 5
+    const HEIGHT          := 120
+    const CONTROL_WIDTH   := 120
+
+    proc create(name : char*) : ui_track_t {
+        track := { ui_track_t: }
+
+        track.name = str(name)
+
+        cwin := { ui_item_t:
+            .kind      = UI_WIN,
+            .t         = 0, # updated continually
+            .l         = ui_track_t.PADDING,
+            .h         = ui_track_t.HEIGHT,
+            .w         = ui_track_t.CONTROL_WIDTH,
+            .win_state = WIN_STATE_NORMAL,
+            .text      = str(name) + str("__control"),
+            .children  = [...ui_item_id],
+            .flags     = WINDOW_BORDER bor WINDOW_BACKGROUND
+        }
+
+        track.controls_win = state.ui.add_item(cwin)
+
+        r1 := new_row_layout_dynamic()
+        l  := new_label(name)
+        r2 := new_row_layout_dynamic()
+        b1 := new_button("MUT")
+        b2 := new_button("MON")
+        b3 := new_button("ARM")
+        r3 := new_row_layout_dynamic()
+
+        input_options := { "Channel 1", "Channel 2" }
+        cb := new_simple_combobox(ui_track_t.HEIGHT / 2, 0.85 * ui_track_t.CONTROL_WIDTH, [ input_options, 0:|input_options| ])
+
+        set_child(r1, l)
+        set_child(r2, b1)
+        set_child(r2, b2)
+        set_child(r2, b3)
+        set_child(r3, cb)
+        set_child(track.controls_win, r1)
+        set_child(track.controls_win, r2)
+        set_child(track.controls_win, r3)
+
+        vwin := { ui_item_t:
+            .kind      = UI_WIN,
+            .t         = 0, # updated continually
+            .l         = ui_track_t.PADDING + ui_track_t.CONTROL_WIDTH + ui_track_t.PADDING,
+            .h         = ui_track_t.HEIGHT,
+            .w         = 0, # updated continually
+            .win_state = WIN_STATE_NORMAL,
+            .text      = str(name) + str("__visual"),
+            .children  = [...ui_item_id],
+            .flags     = WINDOW_BORDER bor WINDOW_BACKGROUND
+        }
+
+        track.visual_win = state.ui.add_item(vwin)
+
+        return track
+    }
+}
+
+type ui_state_t {
+    all_items     : ui_item_t[...]
+    all_windows   : ui_item_id[...]
+    track_windows : ui_item_id[...]
+    tracks        : hash_table$(string, ui_track_t, str_hasher)
+    main_win      : ui_item_id
+    settings_win  : ui_item_id
+    win_h         : int
+    win_w         : int
+    scale_factor  : f32
+    status        : int
+    actions       : hash_table$(string, ui_action_t, str_hasher)
+
+    proc create() : ui_state_t {
+        s := { ui_state_t: }
+
+        s.all_items    = [...ui_item_t]
+        s.all_windows  = [...ui_item_id]
+        s.tracks       = hash_table$(string, ui_track_t, str_hasher).create()
+        s.actions      = hash_table$(string, ui_action_t, str_hasher).create()
+        s.main_win     = -1
+        s.settings_win = -1
+
+        return s
+    }
+
+    proc add_item(this, item : ui_item_t ref) : ui_item_id {
+        this.all_items.push(item)
+        return len(this.all_items) - 1
+    }
+
+    proc add_track(this, name : char*) {
+        t := ui_track_t.create(name)
+        t.number = this.tracks.size
+        this.tracks.insert(t.name, t)
+        this.track_windows.push(t.controls_win)
+        this.track_windows.push(t.visual_win)
+    }
+}
+
+proc get_ui_item(id : ui_item_id) : ui_item_t ref {
+    return state.ui.all_items[id]
+}
+
+proc set_child(item : ui_item_id, child : ui_item_id) {
+    item_ref := get_ui_item(item)
+    item_ref.children.push(child)
+}
+
+proc new_menu_bar() : ui_item_id {
+    m := { ui_item_t:
+        .kind      = UI_MENU_BAR,
+        .text      = str(),
+        .children  = [...ui_item_id],
+    }
+
+    return state.ui.add_item(m)
+}
+
+proc new_button(text : char*) : ui_item_id {
+    b := { ui_item_t:
+        .kind      = UI_BUTTON,
+        .text      = str(text),
+        .children  = [...ui_item_id],
+    }
+
+    return state.ui.add_item(b)
+}
+
+proc new_row_layout_static(width : int) : ui_item_id {
+    r := { ui_item_t:
+        .kind      = UI_ROW_LAYOUT_STATIC,
+        .w         = width,
+        .text      = str(),
+        .children  = [...ui_item_id],
+    }
+
+    return state.ui.add_item(r)
+}
+
+proc new_row_layout_dynamic() : ui_item_id {
+    r := { ui_item_t:
+        .kind      = UI_ROW_LAYOUT_DYNAMIC,
+        .text      = str(),
+        .children  = [...ui_item_id],
+    }
+
+    return state.ui.add_item(r)
+}
+
+proc new_menu_label(text : char*, h : int, w : int) : ui_item_id {
+    l := { ui_item_t:
+        .kind      = UI_MENU_LABEL,
+        .h         = h,
+        .w         = w,
+        .text      = str(text),
+        .children  = [...ui_item_id],
+    }
+
+    return state.ui.add_item(l)
+}
+
+proc new_label(text : char*) : ui_item_id {
+    l := { ui_item_t:
+        .kind      = UI_LABEL,
+        .text      = str(text),
+        .children  = [...ui_item_id],
+    }
+
+    return state.ui.add_item(l)
+}
+
+proc new_simple_combobox(h : int, w : int, options : char*[]) : ui_item_id {
+    l := { ui_item_t:
+        .kind         = UI_SIMPLE_COMBOBOX,
+        .h            = h,
+        .w            = w,
+        .text         = str("Input.."),
+        .text_options = [...char*],
+        .selected     = 0,
+        .children     = [...ui_item_id],
+    }
+
+    foreach o in options { l.text_options.push(cstrdup(o)) }
+
+    return state.ui.add_item(l)
+}
+
+
+proc create_main_window() {
+    win := { ui_item_t:
+        .kind      = UI_WIN,
+        .win_state = WIN_STATE_NORMAL,
+        .text      = str("yodaw"),
+        .children  = [...ui_item_id],
+    }
+
+    w := state.ui.add_item(win)
+    state.ui.main_win = w
+
+    r1 := new_row_layout_static(30)
+    l  := new_menu_label("MENU", 100, 100)
+    r2 := new_row_layout_dynamic()
+    b1 := new_button("settings..")
+    r3 := new_row_layout_dynamic()
+    b2 := new_button("quit")
+
+
+    b1.set_action("show-settings")
+    b2.set_action("quit-on-click")
+
+    set_child(w, r1)
+    set_child(r1, l)
+    set_child(l, r2)
+    set_child(l, r3)
+    set_child(r2, b1)
+    set_child(r3, b2)
+
+    state.ui.add_track("track 1")
+    state.ui.add_track("track 2")
+    state.ui.add_track("track 3")
+}
+
+proc create_settings_window() {
+    win := { ui_item_t:
+        .kind      = UI_WIN,
+        .t         = 200,
+        .l         = 200,
+        .h         = 300,
+        .w         = 300,
+        .win_state = WIN_STATE_CLOSED,
+        .text      = str("Settings"),
+        .children  = [...ui_item_id],
+        .flags = WINDOW_TITLE            bor
+                 WINDOW_CLOSABLE         bor
+                 WINDOW_MOVABLE          bor
+                 WINDOW_BORDER           bor
+                 WINDOW_SCROLL_AUTO_HIDE
+    }
+
+    w := state.ui.add_item(win)
+    state.ui.settings_win = w
+}
+
+proc __no_mangle__ init_ui_state() {
+    state.ui = ui_state_t.create()
+    register_actions()
+
+    state.ui.scale_factor = 1.0
+
+    create_main_window()
+    create_settings_window()
+
+    print "ui state initialized"
+}
+
+proc __no_mangle__ ui_inform_win_size(h : int, w : int) {
+    state.ui.win_h = h
+    state.ui.win_w = w
+}
+
+proc __no_mangle__ ui_get_scale_factor() : f32 {
+    return state.ui.scale_factor
+}
+
+proc __no_mangle__ ui_get_main_win() : ui_item_id {
+    return state.ui.main_win
+}
+
+proc __no_mangle__ ui_get_num_windows() : int {
+    return len(state.ui.all_windows)
+}
+
+proc __no_mangle__ ui_get_windows() : ui_item_id* {
+    return data(state.ui.all_windows)
+}
+
+proc __no_mangle__ ui_item_get_dims(item : ui_item_id, t : int*, l : int*, h : int*, w : int*) {
+    i := get_ui_item(item)
+
+    @t = i.t
+    @l = i.l
+    @h = i.h
+    @w = i.w
+}
+
+proc __no_mangle__ ui_item_set_dims(item : ui_item_id, t : int, l : int, h : int, w : int) {
+    i := get_ui_item(item)
+
+    i.t = t
+    i.l = l
+    i.h = h
+    i.w = w
+}
+
+proc __no_mangle__ ui_item_get_options(item : ui_item_id, n_options : int*, options : char***) {
+    i := get_ui_item(item)
+
+    @n_options = len(i.text_options)
+    @options   = data(i.text_options)
+}
+
+proc __no_mangle__ ui_item_get_selected(item : ui_item_id) : int {
+    return get_ui_item(item).selected
+}
+
+proc __no_mangle__ ui_item_set_selected(item : ui_item_id, selected : int) {
+    get_ui_item(item).selected = selected
+}
+
+proc __no_mangle__ ui_item_get_kind(item : ui_item_id) : int {
+    return get_ui_item(item).kind
+}
+
+proc __no_mangle__ ui_item_get_win_state(item : ui_item_id) : int {
+    win := get_ui_item(item)
+    return win.win_state
+}
+
+proc __no_mangle__ ui_item_set_win_state(item : ui_item_id, state : int) {
+    win := get_ui_item(item)
+    win.win_state = state
+}
+
+proc __no_mangle__ ui_item_get_flags(item : ui_item_id) : u32 {
+    return get_ui_item(item).flags
+}
+
+proc __no_mangle__ ui_item_get_text(item : ui_item_id) : char* {
+    return get_ui_item(item).text.c_str()
+}
+
+proc __no_mangle__ ui_item_get_num_children(item : ui_item_id) : int {
+    return len(get_ui_item(item).children)
+}
+
+proc __no_mangle__ ui_item_get_children(item : ui_item_id) : ui_item_id* {
+    return data(get_ui_item(item).children)
+}
+
+proc __no_mangle__ act_on_ui_item(id : ui_item_id) {
+    item := get_ui_item(id)
+    m_p  := state.ui.actions.lookup(item.act_name)
+
+    if p : pair$(string ref, ui_action_t ref) = m_p {
+        act := unref(p.second)
+        act(item)
+    }
+}
+
+proc update_main_win_properties() {
+    main_win := get_ui_item(state.ui.main_win)
+
+    main_win.t     = 0
+    main_win.l     = 0
+    main_win.h     = state.ui.win_h / state.ui.scale_factor
+    main_win.w     = state.ui.win_w / state.ui.scale_factor
+    main_win.flags = WINDOW_TITLE            bor
+                     WINDOW_CLOSABLE         bor
+                     WINDOW_SCROLL_AUTO_HIDE bor
+                     WINDOW_BACKGROUND
+}
+
+proc update_track_windows() {
+    for it := state.ui.tracks.iter(); not it.is_end(); it.next() {
+        track := it.val().second
+        vwin  := get_ui_item(track.visual_win)
+        cwin  := get_ui_item(track.controls_win)
+
+        vwin.w = (state.ui.win_w / state.ui.scale_factor) - vwin.l - ui_track_t.PADDING
+
+        # This is so hacky, but it seems to work for now.
+        fudge_factor := 40 / state.ui.scale_factor
+        top := (track.number * (ui_track_t.HEIGHT + ui_track_t.PADDING))
+              + ui_track_t.OFFSET_FROM_TOP
+              - ((state.ui.scale_factor - 1.0) * fudge_factor)
+
+        vwin.t = cwin.t = top
+    }
+}
+
+proc __no_mangle__ ui_update() : int {
+    if state.ui.status == UI_STATE_QUIT {
+        return state.ui.status
+    }
+
+    state.ui.scale_factor = 2.0
+
+    main_win := get_ui_item(state.ui.main_win)
+
+    if main_win.win_state == WIN_STATE_CLOSED {
+        state.ui.status = UI_STATE_QUIT
+        return state.ui.status
+    }
+
+    update_main_win_properties()
+    update_track_windows()
+
+    # We'll push these windows in an order that will force
+    # them to be drawn correctly.
+    state.ui.all_windows.clear()
+
+    foreach w in state.ui.track_windows {
+        state.ui.all_windows.push(w)
+    }
+    state.ui.all_windows.push(state.ui.main_win)
+    state.ui.all_windows.push(state.ui.settings_win)
+
+    return state.ui.status
+}
+
+proc register_action(name : char*, action : ui_action_t) {
+    key := str(name)
+    m_p := state.ui.actions.lookup(key)
+
+    if p : pair$(string ref, ui_action_t ref) = m_p {
+        state.ui.actions.insert(p.first, action)
+        key.free()
+    } else {
+        state.ui.actions.insert(key, action)
+    }
+}
+
+proc register_actions() {
+    register_action("quit-on-click", proc (item : ui_item_t ref) {
+        state.ui.status = UI_STATE_QUIT
+    })
+    register_action("show-settings", proc (item : ui_item_t ref) {
+        set_win := get_ui_item(state.ui.settings_win)
+        set_win.win_state = WIN_STATE_NORMAL
+    })
+
+    print "ui actions registered"
+}
+
+proc __no_mangle__ ui_handle_reload() {
+    register_actions()
+}
