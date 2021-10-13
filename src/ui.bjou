@@ -468,7 +468,7 @@ proc __no_mangle__ ui_update() : int {
         return state.ui.status
     }
 
-    state.ui.scale_factor = 2.0
+    state.ui.scale_factor = 1.0
 
     main_win := get_ui_item(state.ui.main_win)
 
